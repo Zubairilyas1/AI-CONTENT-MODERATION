@@ -9,7 +9,7 @@ A full-stack web application for automated AI-powered image content moderation. 
 | Frontend | React + Vite + Tailwind CSS |
 | Backend | Node.js + Express.js |
 | Database | MongoDB + Mongoose |
-| AI | Google Gemini API (`gemini-2.0-flash`) with vision |
+| AI | Google Gemini API (`gemini-3.1-flash`) with vision |
 | Auth | JWT + bcrypt |
 | Uploads | Multer (local `/uploads`) |
 | Containers | Docker + Docker Compose |
