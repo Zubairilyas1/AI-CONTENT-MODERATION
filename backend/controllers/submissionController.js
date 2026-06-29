@@ -1,12 +1,10 @@
-const path = require('path');
-const fs = require('fs');
 const Submission = require('../models/Submission');
 const Image = require('../models/Image');
 const Verdict = require('../models/Verdict');
 const Policy = require('../models/Policy');
 const PolicySnapshot = require('../models/PolicySnapshot');
 const Appeal = require('../models/Appeal');
-const { moderateImage, imageFileToBase64 } = require('../services/moderationService');
+const { moderateImage, imageUrlToBase64 } = require('../services/moderationService');
 
 async function capturePolicySnapshot() {
   const policies = await Policy.find().lean();
@@ -25,8 +23,29 @@ async function capturePolicySnapshot() {
 
 exports.createSubmission = async (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ message: 'At least one image is required.' });
+    const { imageUrls } = req.body;
+
+    // Validate input
+    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+      return res.status(400).json({ 
+        message: 'At least one image URL is required. Send as JSON: { "imageUrls": ["url1", "url2", ...] }' 
+      });
+    }
+
+    if (imageUrls.length > 10) {
+      return res.status(400).json({ message: 'Maximum 10 images per submission.' });
+    }
+
+    // Validate all URLs are strings and valid URLs
+    for (const url of imageUrls) {
+      if (typeof url !== 'string') {
+        return res.status(400).json({ message: 'All image URLs must be strings.' });
+      }
+      try {
+        new URL(url);
+      } catch (error) {
+        return res.status(400).json({ message: `Invalid URL: ${url}` });
+      }
     }
 
     const snapshot = await capturePolicySnapshot();
@@ -39,18 +58,34 @@ exports.createSubmission = async (req, res) => {
 
     const imageIds = [];
 
-    for (const file of req.files) {
+    // Process each image URL
+    for (const imageUrl of imageUrls) {
+      let base64Data;
+      let mediaType;
+
+      try {
+        // Download image from URL
+        console.log(`Downloading image from URL: ${imageUrl}`);
+        const result = await imageUrlToBase64(imageUrl);
+        base64Data = result.base64;
+        mediaType = result.mediaType;
+      } catch (downloadError) {
+        console.error('Image download error:', downloadError);
+        return res.status(400).json({ 
+          message: `Failed to download image from URL: ${downloadError.message}` 
+        });
+      }
+
+      // Create image record with URL
       const image = await Image.create({
         submission_id: submission._id,
-        file_path: file.filename,
+        image_url: imageUrl,
       });
-
-      const filePath = path.join(__dirname, '..', 'uploads', file.filename);
-      const { base64, mediaType } = imageFileToBase64(filePath);
 
       let moderationResult;
       try {
-        moderationResult = await moderateImage(base64, mediaType, activePolicies);
+        // Moderate the image
+        moderationResult = await moderateImage(base64Data, mediaType, activePolicies);
       } catch (aiError) {
         console.error('AI moderation error:', aiError);
         moderationResult = {
@@ -66,6 +101,7 @@ exports.createSubmission = async (req, res) => {
         };
       }
 
+      // Create verdict
       const verdict = await Verdict.create({
         image_id: image._id,
         outcome: moderationResult.outcome,
