@@ -1,6 +1,6 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const fs = require('fs');
-const path = require('path');
+const https = require('https');
+const http = require('http');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -80,6 +80,67 @@ function parseJsonArray(rawText) {
 }
 
 /**
+ * Download image from URL and return base64 + media type.
+ * @param {string} imageUrl - URL of the image
+ * @returns {Promise<{base64: string, mediaType: string}>}
+ */
+async function imageUrlToBase64(imageUrl) {
+  return new Promise((resolve, reject) => {
+    try {
+      // Determine if HTTPS or HTTP
+      const protocol = imageUrl.startsWith('https') ? https : http;
+
+      protocol
+        .get(imageUrl, { timeout: 10000 }, (response) => {
+          // Check if response is successful
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reject(new Error(`Failed to fetch image: HTTP ${response.statusCode}`));
+            return;
+          }
+
+          // Get content type from response headers
+          const contentType = response.headers['content-type'] || 'image/jpeg';
+          const mediaType = contentType.split(';')[0]; // Remove charset if present
+
+          // Validate media type
+          const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+          if (!validTypes.includes(mediaType)) {
+            reject(new Error(`Invalid image type: ${mediaType}. Only JPEG, PNG, GIF, and WebP are allowed.`));
+            return;
+          }
+
+          const chunks = [];
+
+          response.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+
+          response.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+
+            // Check file size (max 10MB)
+            if (buffer.length > 10 * 1024 * 1024) {
+              reject(new Error('Image size exceeds 10MB limit'));
+              return;
+            }
+
+            const base64 = buffer.toString('base64');
+            resolve({
+              base64,
+              mediaType,
+            });
+          });
+        })
+        .on('error', (error) => {
+          reject(new Error(`Failed to download image: ${error.message}`));
+        });
+    } catch (error) {
+      reject(new Error(`Error processing image URL: ${error.message}`));
+    }
+  });
+}
+
+/**
  * Moderate an image using Google Gemini vision API with retry logic.
  * @param {string} imageBase64 - Base64-encoded image data (without data URI prefix)
  * @param {string} mediaType - MIME type e.g. image/jpeg
@@ -142,7 +203,7 @@ Respond ONLY with a valid JSON array. No explanation, no markdown, no extra text
       return applyPolicyRules(normalized, activePolicies);
     } catch (error) {
       lastError = error;
-      
+
       // Check for rate limit error (429)
       if (error.status === 429 && attempt < retries) {
         const waitTime = Math.pow(2, attempt) * 5000; // Exponential backoff: 10s, 20s, 40s
@@ -162,27 +223,8 @@ Respond ONLY with a valid JSON array. No explanation, no markdown, no extra text
   throw lastError;
 }
 
-/**
- * Read image file and return base64 + media type.
- */
-function imageFileToBase64(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const ext = path.extname(filePath).toLowerCase();
-  const mediaTypes = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-  };
-  return {
-    base64: buffer.toString('base64'),
-    mediaType: mediaTypes[ext] || 'image/jpeg',
-  };
-}
-
 module.exports = {
   moderateImage,
   applyPolicyRules,
-  imageFileToBase64,
+  imageUrlToBase64,
 };
